@@ -22,7 +22,8 @@ add_subdirectory(extern)
 # HEADER kaplsm
 # ======================================================================================
 add_library(kaplsm_lib OBJECT
-    ${CMAKE_SOURCE_DIR}/src/kaplsm/kap_compaction.h
+    ${CMAKE_SOURCE_DIR}/src/kaplsm/kap_compaction.hpp
+    ${CMAKE_SOURCE_DIR}/src/kaplsm/kap_options.hpp
 )
 
 target_compile_features(kaplsm_lib PRIVATE
@@ -45,5 +46,5 @@ target_link_libraries(kaplsm_lib PUBLIC
 # ======================================================================================
 # HEADER executables
 # ======================================================================================
-add_executable(main ${CMAKE_SOURCE_DIR}/src/main.cpp)
-target_link_libraries(main PUBLIC kaplsm_lib)
+add_executable(build_db ${CMAKE_SOURCE_DIR}/src/build_db.cpp)
+target_link_libraries(build_db PUBLIC kaplsm_lib CLI11::CLI11 spdlog)
