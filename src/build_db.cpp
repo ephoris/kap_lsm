@@ -4,6 +4,7 @@
 
 #include "kaplsm/kap_compaction.hpp"
 #include "kaplsm/kap_options.hpp"
+#include "rocksdb/options.h"
 
 typedef struct environment {
   std::string db_path;
@@ -44,6 +45,20 @@ int parse_args(int argc, char *argv[], environment &env) {
 
 void build_db(environment &env) {
   spdlog::info("Building DB: {}", env.db_path);
+  rocksdb::Options rocksdb_opt;
+  rocksdb_opt.create_if_missing = true;
+  rocksdb_opt.error_if_exists = true;
+  rocksdb_opt.compaction_style = rocksdb::kCompactionStyleNone;
+  rocksdb_opt.compression = rocksdb::kNoCompression;
+  // Bulk loading so we manually trigger compactions when need be
+  rocksdb_opt.level0_file_num_compaction_trigger = -1;
+  rocksdb_opt.IncreaseParallelism(env.parallelism);
+  rocksdb_opt.disable_auto_compactions = true;
+  rocksdb_opt.num_levels = 20;
+  // Prevents rocksdb from limiting file size
+  // rocksdb_opt.target_file_size_base = UINT64_MAX;
+
+  rocksdb_opt.write_buffer_size = env.kap_opt.buffer_size;
 }
 
 // void build_db(environment &env) {
