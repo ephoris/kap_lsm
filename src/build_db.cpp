@@ -6,12 +6,14 @@
 #include <string>
 #include <utility>
 
-#include "kaplsm/kap_compaction.hpp"
+#include "kap_compactor.hpp"
+#include "kaplsm/kap_compactor.hpp"
 #include "kaplsm/kap_options.hpp"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/table.h"
 #include "rocksdb/write_batch.h"
+#include "spdlog/common.h"
 
 typedef struct environment {
   std::string db_path;
@@ -46,12 +48,25 @@ environment parse_args(int argc, char *argv[]) {
   // Misc commands
   app.add_option("--parallelism", env.parallelism, "Number of worker threads");
   app.add_option("--seed", env.seed, "Random seed");
+  app.add_flag("-v,--verbosity", "verbosity");
 
   try {
     (app).parse((argc), (argv));
   } catch (const CLI::ParseError &e) {
     exit((app).exit(e));
   }
+
+  switch (app.count("-v")) {
+    case 1:
+      spdlog::set_level(spdlog::level::debug);
+      break;
+    case 2:
+      spdlog::set_level(spdlog::level::trace);
+      break;
+    default:
+      spdlog::set_level(spdlog::level::info);
+  }
+  spdlog::info("Verbosity {}", app.count("-v"));
 
   return env;
 }
@@ -111,11 +126,14 @@ rocksdb::Options load_options(environment &env) {
 
 void build_db(environment &env) {
   spdlog::info("Building DB: {}", env.db_path);
-  rocksdb::Options rocksdb_opt = load_options(env);
+  kaplsm::KapOptions kap_options;
+  rocksdb::Options rocksdb_options = load_options(env);
+  rocksdb_options.listeners.emplace_back(
+      new kaplsm::KapCompactor(rocksdb_options, kap_options));
   auto keys = load_keys(env);
 
   rocksdb::DB *db = nullptr;
-  rocksdb::Status status = rocksdb::DB::Open(rocksdb_opt, env.db_path, &db);
+  rocksdb::Status status = rocksdb::DB::Open(rocksdb_options, env.db_path, &db);
   if (!status.ok()) {
     spdlog::error("Problems opening DB");
     spdlog::error("{}", status.ToString());
@@ -135,7 +153,7 @@ void build_db(environment &env) {
     auto kv = create_kv_pair(key, 12, env.kap_opt.entry_size);
     batch.Put(kv.first, kv.second);
     if (batch.Count() > 1'000) {
-      spdlog::info("Writing batch {}", batch_num);
+      spdlog::debug("Writing batch {}", batch_num);
       db->Write(write_opt, &batch);
       batch.Clear();
       batch_num++;

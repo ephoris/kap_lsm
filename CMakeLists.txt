@@ -17,23 +17,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ======================================================================================
 message(STATUS "${CMAKE_MAKE_PROGRAM}")
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -Werror -Wall")
+
 add_subdirectory(extern)
 
 # ======================================================================================
 # HEADER kaplsm
 # ======================================================================================
 add_library(kaplsm_lib OBJECT
-    ${CMAKE_SOURCE_DIR}/src/kaplsm/kap_compaction.cpp
+    ${CMAKE_SOURCE_DIR}/src/kaplsm/kap_compactor.cpp
     ${CMAKE_SOURCE_DIR}/src/utils/keygen.cpp
 )
 
 target_compile_features(kaplsm_lib PRIVATE
     cxx_std_17
-)
-
-target_compile_options(kaplsm_lib PRIVATE
-    "-Werror"
-    "-Wall"
 )
 
 target_include_directories(kaplsm_lib PUBLIC
