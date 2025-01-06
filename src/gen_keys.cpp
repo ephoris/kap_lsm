@@ -3,14 +3,13 @@
 
 #include "spdlog/spdlog.h"
 
-#define MIN_CHUNK_SIZE 1024 * 1024
-
 typedef struct environment {
   std::string key_file;
 
   int verbose = 0;
   int seed = 0;
   int num_keys = 1'000'000;
+  int key_size = 12;
   int start = 0;
   int end = 1'000'000;
 } environment;
@@ -22,6 +21,7 @@ environment parse_args(int argc, char *argv[]) {
 
   app.add_option("key_file", env.key_file, "Name of keyfile");
   app.add_option("--num_keys", env.num_keys, "Number of keys");
+  app.add_option("--key_size", env.key_size, "Size of key");
   app.add_option("--start", env.start, "Start key range");
   app.add_option("--end", env.end, "End key range");
   app.add_option("--seed", env.seed, "Random seed");

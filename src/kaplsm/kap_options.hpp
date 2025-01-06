@@ -13,7 +13,7 @@ public:
   int size_ratio = 2;
   std::vector<int> kapacities = {1};
   int buffer_size = 1 << 20;               //> bytes (B) defaults 1 MB
-  int entry_size = 8192;                   //> bytes (E)
+  int entry_size = 512;                   //> bytes (E)
   double bits_per_element = 5.0;           //> bits per element per bloom filter at all levels (h)
   // bulk_load_type bulk_load_opt = ENTRIES;
   // file_size_policy file_size_policy_opt = INCREASING;
