@@ -1,10 +1,13 @@
+#include <rocksdb/filter_policy.h>
+#include <rocksdb/options.h>
 #include <spdlog/spdlog.h>
 
 #include <CLI/CLI.hpp>
 
 #include "kaplsm/kap_compaction.hpp"
 #include "kaplsm/kap_options.hpp"
-#include "rocksdb/options.h"
+#include "rocksdb/db.h"
+#include "rocksdb/table.h"
 
 typedef struct environment {
   std::string db_path;
@@ -21,8 +24,12 @@ typedef struct environment {
 
 } environment;
 
-int parse_args(int argc, char *argv[], environment &env) {
+environment parse_args(int argc, char *argv[]) {
   CLI::App app{"Database builder"};
+  environment env;
+
+  app.add_option("db_path", env.db_path, "Database path")->required();
+  app.add_option("--key_file", env.key_file, "Key file")->required();
 
   // Database parameters
   app.add_option("-T,--size_ratio", env.kap_opt.size_ratio, "Size ratio");
@@ -38,27 +45,66 @@ int parse_args(int argc, char *argv[], environment &env) {
   app.add_option("--parallelism", env.parallelism, "Number of worker threads");
   app.add_option("--seed", env.seed, "Random seed");
 
-  CLI11_PARSE(app, argc, argv)
+  try {
+    (app).parse((argc), (argv));
+  } catch (const CLI::ParseError &e) {
+    exit((app).exit(e));
+  }
 
-  return EXIT_SUCCESS;
+  return env;
+}
+
+rocksdb::Options load_options(environment &env) {
+  rocksdb::Options opt;
+  opt.create_if_missing = true;
+  opt.error_if_exists = true;
+  opt.compaction_style = rocksdb::kCompactionStyleNone;
+  opt.compression = rocksdb::kNoCompression;
+  // Bulk loading so we manually trigger compactions when need be
+  opt.level0_file_num_compaction_trigger = -1;
+  opt.IncreaseParallelism(env.parallelism);
+  opt.disable_auto_compactions = true;
+  opt.num_levels = 20;
+  // rocksdb_opt.target_file_size_base = UINT64_MAX;
+
+  opt.write_buffer_size = env.kap_opt.buffer_size;
+
+  // Monkey filter policy
+  rocksdb::BlockBasedTableOptions table_options;
+  table_options.filter_policy.reset(rocksdb::NewMonkeyFilterPolicy(
+      env.kap_opt.bits_per_element, env.kap_opt.size_ratio, 20));
+  table_options.no_block_cache = true;
+  opt.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
+
+  return opt;
+}
+
+std::vector<int> load_keys(environment &env) {
+  int num;
+  std::vector<int> vec;
+
+  std::ifstream fid(env.key_file, std::ios::binary);
+  while (fid.read(reinterpret_cast<char *>(&num), sizeof(int))) {
+    vec.push_back(num);
+  }
+  fid.close();
+
+  return vec;
 }
 
 void build_db(environment &env) {
   spdlog::info("Building DB: {}", env.db_path);
-  rocksdb::Options rocksdb_opt;
-  rocksdb_opt.create_if_missing = true;
-  rocksdb_opt.error_if_exists = true;
-  rocksdb_opt.compaction_style = rocksdb::kCompactionStyleNone;
-  rocksdb_opt.compression = rocksdb::kNoCompression;
-  // Bulk loading so we manually trigger compactions when need be
-  rocksdb_opt.level0_file_num_compaction_trigger = -1;
-  rocksdb_opt.IncreaseParallelism(env.parallelism);
-  rocksdb_opt.disable_auto_compactions = true;
-  rocksdb_opt.num_levels = 20;
-  // Prevents rocksdb from limiting file size
-  // rocksdb_opt.target_file_size_base = UINT64_MAX;
+  rocksdb::Options rocksdb_opt = load_options(env);
+  auto keys = load_keys(env);
 
-  rocksdb_opt.write_buffer_size = env.kap_opt.buffer_size;
+  // rocksdb::DB *db = nullptr;
+  // rocksdb::Status status = rocksdb::DB::Open(rocksdb_opt, env.db_path, &db);
+  // if (!status.ok()) {
+  //   spdlog::error("Problems opening DB");
+  //   spdlog::error("{}", status.ToString());
+  //   delete db;
+  //   exit(EXIT_FAILURE);
+  // }
 }
 
 // void build_db(environment &env) {
@@ -162,11 +208,9 @@ void build_db(environment &env) {
 
 int main(int argc, char *argv[]) {
   spdlog::info("Building database...");
-  environment env;
+  environment env = parse_args(argc, argv);
 
-  if (!parse_args(argc, argv, env)) {
-    return EXIT_FAILURE;
-  }
+  build_db(env);
 
   return EXIT_SUCCESS;
 }

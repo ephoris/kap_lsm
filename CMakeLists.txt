@@ -48,3 +48,6 @@ target_link_libraries(kaplsm_lib PUBLIC
 # ======================================================================================
 add_executable(build_db ${CMAKE_SOURCE_DIR}/src/build_db.cpp)
 target_link_libraries(build_db PUBLIC kaplsm_lib CLI11::CLI11 spdlog)
+
+add_executable(gen_keys ${CMAKE_SOURCE_DIR}/src/gen_keys.cpp)
+target_link_libraries(gen_keys PUBLIC kaplsm_lib CLI11::CLI11 spdlog)
