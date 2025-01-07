@@ -1,7 +1,11 @@
 #include "kap_compactor.hpp"
 
+#include <cmath>
+#include <iostream>
+
 #include "rocksdb/db.h"
 #include "rocksdb/listener.h"
+#include "rocksdb/metadata.h"
 #include "rocksdb/options.h"
 
 using ROCKSDB_NAMESPACE::ColumnFamilyMetaData;
@@ -14,34 +18,82 @@ using namespace kaplsm;
 // triggered_writes_stop is true, it will also set the retry flag of
 // compaction-task to true.
 void KapCompactor::OnFlushCompleted(DB* db, const FlushJobInfo& info) {
-  CompactionTask* task = PickCompaction(db, info.cf_name);
-  if (task != nullptr) {
-    if (info.triggered_writes_stop) {
-      task->retry_on_fail = true;
+  for (size_t level_idx = 0;
+       level_idx < static_cast<size_t>(this->rocksdb_options_.num_levels) - 1;
+       level_idx++) {
+    CompactionTask* task = PickCompaction(db, info.cf_name, level_idx);
+    if (task != nullptr) {
+      if (info.triggered_writes_stop) {
+        task->retry_on_fail = true;
+      }
+      // Schedule compaction in a different thread.
+      std::cout << "Scheduling task from level " << task->input_level << " to "
+                << task->output_level << std::endl;
+      ScheduleCompaction(task);
     }
-    // Schedule compaction in a different thread.
-    ScheduleCompaction(task);
   }
 }
 
-// Always pick a compaction which includes all files whenever possible.
-CompactionTask* KapCompactor::PickCompaction(DB* db,
-                                                const std::string& cf_name) {
-  ColumnFamilyMetaData cf_meta;
-  db->GetColumnFamilyMetaData(&cf_meta);
+// When a compaction finishes, we will also check to make sure the state of the
+// tree is OK. This SHOULD be called until the tree returns no more viable
+// compaction jobs
+void KapCompactor::OnCompactionCompleted(DB* db,
+                                         const CompactionJobInfo& info) {
+  for (size_t level_idx = 0;
+       level_idx < static_cast<size_t>(this->rocksdb_options_.num_levels) - 1;
+       level_idx++) {
+    CompactionTask* task = PickCompaction(db, info.cf_name, level_idx);
+    if (task != nullptr) {
+      std::cout << "Scheduling task from level " << task->input_level << " to "
+                << task->output_level << std::endl;
+      ScheduleCompaction(task);
+    }
+  }
+}
+
+std::vector<std::string> KapCompactor::CheckIfLevelNeedsCompaction(
+    rocksdb::LevelMetaData level) {
+  auto level_kapacity = this->kap_options_.kapacities[level.level];
+  if (level.files.size() <= static_cast<size_t>(level_kapacity)) {
+    return {};
+  }
 
   std::vector<std::string> input_file_names;
-  for (auto level : cf_meta.levels) {
-    for (auto file : level.files) {
-      if (file.being_compacted) {
-        return nullptr;
-      }
+  for (auto file : level.files) {
+    if (!file.being_compacted) {
       input_file_names.push_back(file.name);
     }
   }
+
+  return input_file_names;
+}
+
+// PickCompaction looks at one paritcular level and checks whether or not the
+// level is full and needs to compact. If no compaction is needed, returns a
+// nullptr
+CompactionTask* KapCompactor::PickCompaction(DB* db, const std::string& cf_name,
+                                             size_t level_idx) {
+  ColumnFamilyMetaData cf_meta;
+  rocksdb::CompactionOptions opt;
+  db->GetColumnFamilyMetaData(&cf_meta);
+  auto level = cf_meta.levels[level_idx];
+  auto size_ratio = this->rocksdb_options_.target_file_size_multiplier;
+  auto file_base = this->rocksdb_options_.target_file_size_base;
+  auto k_level = this->kap_options_.kapacities.at(level.level);
+  // Each level is (total_level_size) / (num_file_kapacity) where
+  // total_level_size is equal to m*T^l where l is level, T is size ratio, and m
+  // is the size of the memory buffer. We add +1 since RocksDB starts numbering
+  // levels at 0.
+  auto file_size = (file_base * pow(size_ratio, level.level + 1)) / k_level;
+  // Adding an extra ~4% bytes to accomedate for file meta data
+  opt.output_file_size_limit = 1.04 * file_size;
+  auto input_file_names = this->CheckIfLevelNeedsCompaction(level);
+  if (input_file_names.size() < 1) {
+    return nullptr;
+  }
+
   return new CompactionTask(db, this, cf_name, input_file_names,
-                            rocksdb_options_.num_levels - 1, compact_options_,
-                            false);
+                            level.level + 1, level.level, opt, false);
 }
 
 // Schedule the specified compaction task in background.
@@ -60,8 +112,8 @@ void KapCompactor::CompactFiles(void* arg) {
     // If a compaction task with its retry_on_fail=true failed,
     // try to schedule another compaction in case the reason
     // is not an IO error.
-    CompactionTask* new_task =
-        task->compactor->PickCompaction(task->db, task->column_family_name);
+    CompactionTask* new_task = task->compactor->PickCompaction(
+        task->db, task->column_family_name, task->input_level);
     task->compactor->ScheduleCompaction(new_task);
   }
 }

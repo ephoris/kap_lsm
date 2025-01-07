@@ -1,9 +1,12 @@
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/options.h>
 #include <spdlog/spdlog.h>
+#include <unistd.h>
 
 #include <CLI/CLI.hpp>
+#include <iostream>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "kap_compactor.hpp"
@@ -23,6 +26,8 @@ typedef struct environment {
   int parallelism = 1;
   int seed = 0;
   bool early_fill_stop = false;
+  uint32_t batch_size = 1'000;
+  int key_size = 12;
 
   std::string key_file;
   bool use_key_file = false;
@@ -48,6 +53,8 @@ environment parse_args(int argc, char *argv[]) {
   // Misc commands
   app.add_option("--parallelism", env.parallelism, "Number of worker threads");
   app.add_option("--seed", env.seed, "Random seed");
+  app.add_option("--batch_size", env.batch_size, "Batch size per write");
+  app.add_option("--key_size", env.key_size, "Key size")->default_val(12);
   app.add_flag("-v,--verbosity", "verbosity");
 
   try {
@@ -99,6 +106,20 @@ std::pair<rocksdb::Slice, rocksdb::Slice> create_kv_pair(int key, int key_size,
   return std::pair<rocksdb::Slice, rocksdb::Slice>(padded_key, val);
 }
 
+bool compactions_in_progress(rocksdb::DB *db) {
+  uint64_t compacts_in_progress = 0;
+  db->GetIntProperty("rocksdb.background_compactions", &compacts_in_progress);
+  spdlog::debug("Remaining compactions {}", compacts_in_progress);
+
+  return compacts_in_progress > 0;
+}
+
+void wait_for_all_background_compactions(rocksdb::DB *db) {
+  while (compactions_in_progress(db)) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+
 rocksdb::Options load_options(environment &env) {
   // rocksdb::Options opt = *rocksdb::Options().PrepareForBulkLoad();
   rocksdb::Options opt;
@@ -107,11 +128,14 @@ rocksdb::Options load_options(environment &env) {
   opt.compaction_style = rocksdb::kCompactionStyleNone;
   opt.compression = rocksdb::kNoCompression;
   // Bulk loading so we manually trigger compactions when need be
-  opt.level0_file_num_compaction_trigger = -1;
+  opt.level0_file_num_compaction_trigger = env.kap_opt.size_ratio;
+  opt.level0_slowdown_writes_trigger = 20;
   opt.IncreaseParallelism(env.parallelism);
-  opt.disable_auto_compactions = true;
+  // opt.disable_auto_compactions = true;
   opt.num_levels = 20;
   // opt.target_file_size_base = UINT64_MAX;
+  opt.target_file_size_multiplier = env.kap_opt.size_ratio;
+  opt.target_file_size_base = env.kap_opt.buffer_size;
   opt.write_buffer_size = env.kap_opt.buffer_size;
 
   // Monkey filter policy
@@ -128,8 +152,8 @@ void build_db(environment &env) {
   spdlog::info("Building DB: {}", env.db_path);
   kaplsm::KapOptions kap_options;
   rocksdb::Options rocksdb_options = load_options(env);
-  rocksdb_options.listeners.emplace_back(
-      new kaplsm::KapCompactor(rocksdb_options, kap_options));
+  auto kcompactor = new kaplsm::KapCompactor(rocksdb_options, kap_options);
+  rocksdb_options.listeners.emplace_back(kcompactor);
   auto keys = load_keys(env);
 
   rocksdb::DB *db = nullptr;
@@ -150,9 +174,9 @@ void build_db(environment &env) {
   int batch_num = 0;
 
   for (auto key : keys) {
-    auto kv = create_kv_pair(key, 12, env.kap_opt.entry_size);
+    auto kv = create_kv_pair(key, env.key_size, env.kap_opt.entry_size);
     batch.Put(kv.first, kv.second);
-    if (batch.Count() > 1'000) {
+    if (batch.Count() > env.batch_size) {
       spdlog::debug("Writing batch {}", batch_num);
       db->Write(write_opt, &batch);
       batch.Clear();
@@ -163,126 +187,33 @@ void build_db(environment &env) {
     spdlog::info("Writing last batch...", batch_num);
     db->Write(write_opt, &batch);
   }
+  // wait_for_all_background_compactions(db);
+  // db->Flush(rocksdb::FlushOptions());
+  // wait_for_all_background_compactions(db);
+  auto wfc_opts = rocksdb::WaitForCompactOptions();
+  wfc_opts.wait_for_purge = true;
+  wfc_opts.flush = true;
+  db->WaitForCompact(wfc_opts);
   db->Flush(rocksdb::FlushOptions());
+  db->WaitForCompact(wfc_opts);
 
-  if (spdlog::get_level() <= spdlog::level::debug) {
-    spdlog::debug("Files per level");
-    rocksdb::ColumnFamilyMetaData cf_meta;
-    db->GetColumnFamilyMetaData(&cf_meta);
-
-    std::vector<std::string> file_names;
-    int level_idx = 1;
-    for (auto &level : cf_meta.levels) {
-      std::string level_str = "";
-      for (auto &file : level.files) {
-        level_str += file.name + ", ";
-      }
-      level_str =
-          level_str == "" ? "EMPTY" : level_str.substr(0, level_str.size() - 2);
-      spdlog::debug("Level {} : {}", level_idx, level_str);
-      level_idx++;
+  spdlog::info("State of the tree:");
+  rocksdb::ColumnFamilyMetaData cf_meta;
+  db->GetColumnFamilyMetaData(&cf_meta);
+  std::vector<std::string> file_names;
+  for (auto &level : cf_meta.levels) {
+    std::string level_str = "";
+    for (auto &file : level.files) {
+      level_str += file.name + ", ";
     }
+    level_str =
+        level_str == "" ? "EMPTY" : level_str.substr(0, level_str.size() - 2);
+    spdlog::info("Level {} | Size: {} | Files: {}", level.level, level.size,
+                 level_str);
   }
-}
 
-// void build_db(environment &env) {
-//   spdlog::info("Building DB: {}", env.db_path);
-//   rocksdb::Options rocksdb_opt;
-//   tmpdb::FluidOptions fluid_opt;
-//
-//   rocksdb_opt.create_if_missing = true;
-//   rocksdb_opt.error_if_exists = true;
-//   rocksdb_opt.compaction_style = rocksdb::kCompactionStyleNone;
-//   rocksdb_opt.compression = rocksdb::kNoCompression;
-//   // Bulk loading so we manually trigger compactions when need be
-//   rocksdb_opt.level0_file_num_compaction_trigger = -1;
-//   rocksdb_opt.IncreaseParallelism(env.parallelism);
-//
-//   rocksdb_opt.disable_auto_compactions = true;
-//   rocksdb_opt.write_buffer_size = env.B;
-//   rocksdb_opt.num_levels = env.max_rocksdb_levels;
-//   // Prevents rocksdb from limiting file size
-//   rocksdb_opt.target_file_size_base = UINT64_MAX;
-//
-//   fill_fluid_opt(env, fluid_opt);
-//   DataGenerator *gen;
-//   if (env.use_key_file) {
-//     gen = new KeyFileGenerator(env.key_file, 2 * env.N, env.seed, "uniform");
-//   } else {
-//     gen = new RandomGenerator(env.seed);
-//   }
-//   FluidLSMBulkLoader *fluid_compactor =
-//       new FluidLSMBulkLoader(*gen, fluid_opt, rocksdb_opt,
-//       env.early_fill_stop);
-//   rocksdb_opt.listeners.emplace_back(fluid_compactor);
-//
-//   rocksdb::BlockBasedTableOptions table_options;
-//   if (env.default_on) {
-//     table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
-//   } else if (env.L > 0) {
-//     table_options.filter_policy.reset(rocksdb::NewMonkeyFilterPolicy(
-//         env.bits_per_element, (int)env.T, env.L + 1));
-//   } else {
-//     table_options.filter_policy.reset(rocksdb::NewMonkeyFilterPolicy(
-//         env.bits_per_element, (int)env.T,
-//         FluidLSMBulkLoader::estimate_levels(env.N, env.T, env.E, env.B) +
-//         1));
-//   }
-//   table_options.no_block_cache = true;
-//   rocksdb_opt.table_factory.reset(
-//       rocksdb::NewBlockBasedTableFactory(table_options));
-//
-//   rocksdb::DB *db = nullptr;
-//   rocksdb::Status status = rocksdb::DB::Open(rocksdb_opt, env.db_path, &db);
-//   if (!status.ok()) {
-//     spdlog::error("Problems opening DB");
-//     spdlog::error("{}", status.ToString());
-//     delete db;
-//     exit(EXIT_FAILURE);
-//   }
-//
-//   if (env.bulk_load_mode == tmpdb::bulk_load_type::LEVELS) {
-//     status = fluid_compactor->bulk_load_levels(db, env.L);
-//   } else {
-//     status = fluid_compactor->bulk_load_entries(db, env.N);
-//   }
-//
-//   if (!status.ok()) {
-//     spdlog::error("Problems bulk loading: {}", status.ToString());
-//     delete db;
-//     exit(EXIT_FAILURE);
-//   }
-//
-//   spdlog::info("Waiting for all compactions to finish before closing");
-//   // Wait for all compactions to finish before flushing and closing DB
-//   while (fluid_compactor->compactions_left_count > 0);
-//
-//   if (spdlog::get_level() <= spdlog::level::debug) {
-//     spdlog::debug("Files per level");
-//     rocksdb::ColumnFamilyMetaData cf_meta;
-//     db->GetColumnFamilyMetaData(&cf_meta);
-//
-//     std::vector<std::string> file_names;
-//     int level_idx = 1;
-//     for (auto &level : cf_meta.levels) {
-//       std::string level_str = "";
-//       for (auto &file : level.files) {
-//         level_str += file.name + ", ";
-//       }
-//       level_str =
-//           level_str == "" ? "EMPTY" : level_str.substr(0, level_str.size() -
-//           2);
-//       spdlog::debug("Level {} : {}", level_idx, level_str);
-//       level_idx++;
-//     }
-//   }
-//
-//   write_existing_keys(env, fluid_compactor);
-//   fluid_opt.write_config(env.db_path + "/fluid_config.json");
-//
-//   db->Close();
-//   delete db;
-// }
+  db->Close();
+}
 
 int main(int argc, char *argv[]) {
   spdlog::info("Building database...");

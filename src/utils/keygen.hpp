@@ -6,7 +6,6 @@
 #include <ctime>
 #include <random>
 
-#include "rocksdb/slice.h"
 #include "zipf.hpp"
 
 #define KEY_DOMAIN 1000000000
@@ -35,19 +34,4 @@ class Zipf : public Distribution {
 
  private:
   opencog::zipf_distribution<int, double> dist;
-};
-
-class KeyGenerator {
- public:
-  int max;
-  int key_size;
-  std::mt19937 engine;
-  Uniform* dist;
-
-  KeyGenerator(int key_size, int max, int seed = 0);
-  ~KeyGenerator() {}
-
-  std::string gen_random_key();
-  std::string padded_str_from_int(int num);
-  rocksdb::Slice key_from_int(int num);
 };

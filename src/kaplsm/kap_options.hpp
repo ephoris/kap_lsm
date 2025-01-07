@@ -11,7 +11,7 @@ namespace kaplsm {
 class KapOptions {
  public:
   int size_ratio = 2;
-  std::vector<int> kapacities = {1};
+  std::vector<int> kapacities;
   int buffer_size = 1 << 20;  //> bytes (B) defaults 1 MB
   int entry_size = 512;       //> bytes (E)
 
@@ -26,7 +26,7 @@ class KapOptions {
   unsigned int levels = 0;
   size_t file_size = std::numeric_limits<size_t>::max();
 
-  KapOptions() {};
+  KapOptions() : kapacities(20, 1) {};
   KapOptions(std::string config_path);
 };
 
