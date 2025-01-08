@@ -35,6 +35,7 @@ target_compile_features(kaplsm_lib PRIVATE
 
 target_include_directories(kaplsm_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/extern/rocksdb/include
+    ${CMAKE_SOURCE_DIR}/extern
     ${CMAKE_SOURCE_DIR}/src/kaplsm
     ${CMAKE_SOURCE_DIR}/src/uitls
 )
@@ -50,6 +51,9 @@ target_link_libraries(kaplsm_lib PUBLIC
 # ======================================================================================
 add_executable(build_db ${CMAKE_SOURCE_DIR}/src/build_db.cpp)
 target_link_libraries(build_db PUBLIC kaplsm_lib)
+
+add_executable(run_db ${CMAKE_SOURCE_DIR}/src/run_db.cpp)
+target_link_libraries(run_db PUBLIC kaplsm_lib)
 
 add_executable(gen_keys ${CMAKE_SOURCE_DIR}/src/gen_keys.cpp)
 target_link_libraries(gen_keys PUBLIC kaplsm_lib)

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 
 #include "kap_options.hpp"
 #include "rocksdb/db.h"
@@ -9,11 +8,11 @@
 #include "rocksdb/metadata.h"
 #include "rocksdb/options.h"
 
+using ROCKSDB_NAMESPACE::CompactionJobInfo;
 using ROCKSDB_NAMESPACE::CompactionOptions;
 using ROCKSDB_NAMESPACE::DB;
 using ROCKSDB_NAMESPACE::EventListener;
 using ROCKSDB_NAMESPACE::FlushJobInfo;
-using ROCKSDB_NAMESPACE::CompactionJobInfo;
 
 namespace kaplsm {
 

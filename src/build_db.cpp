@@ -155,6 +155,8 @@ void build_db(environment &env) {
   auto kcompactor = new kaplsm::KapCompactor(rocksdb_options, kap_options);
   rocksdb_options.listeners.emplace_back(kcompactor);
   auto keys = load_keys(env);
+  kap_options.num_keys = keys.size();
+  kap_options.levels = rocksdb_options.num_levels;
 
   rocksdb::DB *db = nullptr;
   rocksdb::Status status = rocksdb::DB::Open(rocksdb_options, env.db_path, &db);
@@ -164,6 +166,7 @@ void build_db(environment &env) {
     delete db;
     exit(EXIT_FAILURE);
   }
+
   rocksdb::WriteOptions write_opt;
   write_opt.sync = false;
   write_opt.low_pri = true;
@@ -210,6 +213,10 @@ void build_db(environment &env) {
   }
 
   db->Close();
+  delete db;
+
+  spdlog::info("Writing kap options...");
+  kap_options.WriteConfig(env.db_path + "/kap_options.json");
 }
 
 int main(int argc, char *argv[]) {
