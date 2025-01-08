@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <spdlog/spdlog.h>
 
 #include "rocksdb/db.h"
 #include "rocksdb/listener.h"
@@ -27,8 +28,7 @@ void KapCompactor::OnFlushCompleted(DB* db, const FlushJobInfo& info) {
         task->retry_on_fail = true;
       }
       // Schedule compaction in a different thread.
-      std::cout << "Scheduling task from level " << task->input_level << " to "
-                << task->output_level << std::endl;
+      spdlog::debug("Scheduling task from {} -> {}", task->input_level, task->output_level);
       ScheduleCompaction(task);
     }
   }

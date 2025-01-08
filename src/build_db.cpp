@@ -187,9 +187,6 @@ void build_db(environment &env) {
     spdlog::info("Writing last batch...", batch_num);
     db->Write(write_opt, &batch);
   }
-  // wait_for_all_background_compactions(db);
-  // db->Flush(rocksdb::FlushOptions());
-  // wait_for_all_background_compactions(db);
   auto wfc_opts = rocksdb::WaitForCompactOptions();
   wfc_opts.wait_for_purge = true;
   wfc_opts.flush = true;

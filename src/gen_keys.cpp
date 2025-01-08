@@ -57,7 +57,7 @@ int main(int argc, char *argv[]) {
   fid.write(reinterpret_cast<char *>(keys.data()), env.num_keys * sizeof(int));
   fid.close();
 
-  auto extra_key_file = env.key_file + ".extras";
+  auto extra_key_file = "extra_" + env.key_file;
   spdlog::info("Writing extra keys to {}", extra_key_file);
   std::ofstream extra_fid(extra_key_file, std::ios::binary);
   if (!extra_fid.is_open()) {

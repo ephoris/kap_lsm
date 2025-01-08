@@ -29,6 +29,7 @@ typedef struct environment {
   int key_size = 12;
 
   std::string key_file;
+  std::string extra_key_file;
   bool use_key_file = false;
 
 } environment;
@@ -39,7 +40,7 @@ environment parse_args(int argc, char *argv[]) {
 
   app.add_option("db_path", env.db_path, "Database path")->required();
   app.add_option("--key_file", env.key_file, "Key file")->required();
-  app.add_option("--extra_key_file", env.key_file, "Key file")->required();
+  app.add_option("--extra_key_file", env.extra_key_file, "Key file")->required();
 
   // Misc commands
   app.add_option("--parallelism", env.parallelism, "Number of worker threads");
@@ -131,7 +132,30 @@ rocksdb::Options load_options(environment &env) {
   return opt;
 }
 
+void run_non_empty_reads(rocksdb::DB *db, std::vector<int> keys) {
+  rocksdb::ReadOptions read_opt;
+  read_opt.fill_cache = false;
+  read_opt.verify_checksums = false;
+  read_opt.total_order_seek = false;
 
+  for (auto &key : keys) {
+    std::string value;
+    auto status = db->Get(read_opt, pad_str_from_int(key, 12), &value);
+    if (!status.ok()) {
+      spdlog::error("Error reading key: {}", key);
+      spdlog::error("{}", status.ToString());
+    }
+  }
+}
+
+void wait_for_all_compactions(rocksdb::DB * db) {
+  auto wfc_opts = rocksdb::WaitForCompactOptions();
+  wfc_opts.wait_for_purge = true;
+  wfc_opts.flush = true;
+  db->WaitForCompact(wfc_opts);
+  db->Flush(rocksdb::FlushOptions());
+  db->WaitForCompact(wfc_opts);
+}
 
 void build_db(environment &env) {
   spdlog::info("Building DB: {}", env.db_path);
@@ -139,7 +163,11 @@ void build_db(environment &env) {
   rocksdb::Options rocksdb_options = load_options(env);
   auto kcompactor = new kaplsm::KapCompactor(rocksdb_options, kap_options);
   rocksdb_options.listeners.emplace_back(kcompactor);
-  // auto keys = load_keys(env);
+
+  // Keys will contain ALL keys presently in the database
+  auto keys = load_keys(env.key_file);
+  // Extra keys are used exclusively for empty_reads and uniqe writes
+  auto extra_keys = load_keys(env.extra_key_file);
 
   rocksdb::DB *db = nullptr;
   rocksdb::Status status = rocksdb::DB::Open(rocksdb_options, env.db_path, &db);
@@ -155,28 +183,7 @@ void build_db(environment &env) {
   write_opt.disableWAL = true;
   write_opt.no_slowdown = false;
 
-  rocksdb::WriteBatch batch;
-
-  // for (auto key : keys) {
-  //   auto kv = create_kv_pair(key, env.key_size, env.kap_opt.entry_size);
-  //   batch.Put(kv.first, kv.second);
-  //   if (batch.Count() > env.batch_size) {
-  //     spdlog::debug("Writing batch {}", batch_num);
-  //     db->Write(write_opt, &batch);
-  //     batch.Clear();
-  //     batch_num++;
-  //   }
-  // }
-  // if (batch.Count() > 0) {
-  //   spdlog::info("Writing last batch...", batch_num);
-  //   db->Write(write_opt, &batch);
-  // }
-  auto wfc_opts = rocksdb::WaitForCompactOptions();
-  wfc_opts.wait_for_purge = true;
-  wfc_opts.flush = true;
-  db->WaitForCompact(wfc_opts);
-  db->Flush(rocksdb::FlushOptions());
-  db->WaitForCompact(wfc_opts);
+  wait_for_all_compactions(db);
 
   spdlog::info("State of the tree:");
   rocksdb::ColumnFamilyMetaData cf_meta;
