@@ -1,8 +1,9 @@
 #include "kap_compactor.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <cmath>
 #include <iostream>
-#include <spdlog/spdlog.h>
 
 #include "rocksdb/db.h"
 #include "rocksdb/listener.h"
@@ -28,7 +29,8 @@ void KapCompactor::OnFlushCompleted(DB* db, const FlushJobInfo& info) {
         task->retry_on_fail = true;
       }
       // Schedule compaction in a different thread.
-      spdlog::debug("Scheduling task from {} -> {}", task->input_level, task->output_level);
+      spdlog::debug("Scheduling task from {} -> {}", task->input_level,
+                    task->output_level);
       ScheduleCompaction(task);
     }
   }
@@ -105,9 +107,11 @@ void KapCompactor::CompactFiles(void* arg) {
   std::unique_ptr<CompactionTask> task(static_cast<CompactionTask*>(arg));
   assert(task);
   assert(task->db);
+  spdlog::debug("Scheduling compaction {} -> {}", task->input_level,
+                task->output_level);
   rocksdb::Status s = task->db->CompactFiles(
       task->compact_options, task->input_file_names, task->output_level);
-  printf("CompactFiles() finished with status %s\n", s.ToString().c_str());
+  spdlog::debug("CompactFiles() finished with status {}", s.ToString());
   if (!s.ok() && !s.IsIOError() && task->retry_on_fail) {
     // If a compaction task with its retry_on_fail=true failed,
     // try to schedule another compaction in case the reason

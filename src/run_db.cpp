@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <CLI/CLI.hpp>
+#include <algorithm>
 #include <iostream>
 #include <random>
 #include <string>
@@ -17,6 +18,7 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/table.h"
 #include "rocksdb/write_batch.h"
+#include "utils/keygen.hpp"
 
 #define PAGESIZE 4096
 
@@ -126,6 +128,7 @@ rocksdb::Options load_options(environment &env) {
   opt.compaction_style = rocksdb::kCompactionStyleNone;
   opt.compression = rocksdb::kNoCompression;
   // Bulk loading so we manually trigger compactions when need be
+  // Generally we will set threads to 1 to get single thread numbers
   opt.IncreaseParallelism(env.parallelism);
   opt.use_direct_reads = true;
   opt.use_direct_io_for_flush_and_compaction = true;
@@ -135,9 +138,9 @@ rocksdb::Options load_options(environment &env) {
   opt.num_levels = 20;
 
   // Slow down triggers
-  opt.level0_slowdown_writes_trigger = 2 * (env.kap_opt.size_ratio + 1);
-  opt.level0_stop_writes_trigger = 3 * (env.kap_opt.size_ratio + 1);
-  opt.level0_file_num_compaction_trigger = env.kap_opt.size_ratio;
+  opt.level0_slowdown_writes_trigger = 2 * (env.kap_opt.kapacities[0] + 1);
+  opt.level0_stop_writes_trigger = 3 * (env.kap_opt.kapacities[0] + 1);
+  opt.level0_file_num_compaction_trigger = env.kap_opt.kapacities[0];
 
   // Classic LSM parameters
   opt.target_file_size_multiplier = env.kap_opt.size_ratio;
@@ -188,6 +191,7 @@ std::chrono::milliseconds read_keys(rocksdb::DB *db, std::vector<int> &keys) {
   auto read_start = std::chrono::high_resolution_clock::now();
   for (auto &key : keys) {
     std::string value;
+    spdlog::trace("Reading key: {}", key);
     auto status = db->Get(read_opt, pad_str_from_int(key, 12), &value);
     if (!status.ok() && !status.IsNotFound()) {
       spdlog::error("Error reading key: {}", key);
@@ -211,14 +215,16 @@ std::chrono::milliseconds range_reads(environment env, rocksdb::DB *db,
   std::sort(exisiting_keys.begin(), exisiting_keys.end());
   std::vector<int> keys(exisiting_keys.begin(),
                         exisiting_keys.begin() + env.num_range_reads);
+  std::uniform_int_distribution<int> dist(0, keys.size() - key_hop);
+  std::mt19937 engine(env.seed);
 
   auto range_read_start = std::chrono::high_resolution_clock::now();
-  for (size_t range_count = 0; range_count < keys.size(); range_count++) {
-    auto lower_key = pad_str_from_int(exisiting_keys[range_count], 12);
-    auto upper_key =
-        pad_str_from_int(exisiting_keys[range_count + key_hop], 12);
+  for (int count = 0; count < env.num_range_reads; count++) {
+    int index = dist(engine);
+    auto lower_key = pad_str_from_int(exisiting_keys[index], 12);
+    auto upper_key = pad_str_from_int(exisiting_keys[index + key_hop], 12);
     read_opt.iterate_upper_bound = new rocksdb::Slice(upper_key);
-
+    spdlog::trace("Range read: {} -> {}", lower_key, upper_key);
     auto it = db->NewIterator(read_opt);
     for (it->Seek(rocksdb::Slice(lower_key)); it->Valid(); it->Next()) {
       auto value = it->value().ToString();
@@ -233,19 +239,42 @@ std::chrono::milliseconds range_reads(environment env, rocksdb::DB *db,
   return range_read_duration;
 }
 
-std::chrono::milliseconds write_keys(rocksdb::DB *db, std::vector<int> &keys) {
+std::chrono::milliseconds write_keys(environment &env, rocksdb::DB *db,
+                                     int num_keys) {
   rocksdb::WriteOptions write_opt;
   write_opt.sync = false;
   write_opt.low_pri = true;
   write_opt.disableWAL = true;
   write_opt.no_slowdown = false;
 
+  std::uniform_int_distribution<int> dist(num_keys, 2 * num_keys);
+  std::mt19937 engine(42);
+  spdlog::trace("Flushing DB to get into correct state");
+  // Force compaction of all files in Level 0
+  // Use an empty key range to compact everything
+  rocksdb::ColumnFamilyMetaData cf_meta;
+  rocksdb::CompactionOptions opt;
+  db->GetColumnFamilyMetaData(&cf_meta);
+  spdlog::debug("Force compaction of all files in Level 0 to prevent deadlock");
+  if (cf_meta.levels[0].files.size() > 0) {
+    std::vector<std::string> file_names;
+    spdlog::debug("Files in Level 0: {}", cf_meta.levels[0].files.size());
+    for (auto &file : cf_meta.levels[0].files) {
+      file_names.push_back(file.name);
+    }
+    db->CompactFiles(opt, file_names, 1);
+  }
+  wait_for_all_compactions(db);
+  spdlog::debug("Finished force compaction, starting writes");
+
   auto write_start = std::chrono::high_resolution_clock::now();
-  for (auto &key : keys) {
-    auto kv = create_kv_pair(key, 12, 100);
+  for (auto write_idx = 0; write_idx < env.num_writes; write_idx++) {
+    // Adding num_keys to ensure all keys are unique writes
+    auto kv = create_kv_pair(dist(engine), 12, env.kap_opt.entry_size);
+    spdlog::trace("Writing key: {}", kv.first.data());
     auto status = db->Put(write_opt, kv.first, kv.second);
     if (!status.ok()) {
-      spdlog::error("Error writing key: {}", key);
+      spdlog::error("Error writing key: {}", kv.first.data());
       spdlog::error("{}", status.ToString());
     }
   }
@@ -301,9 +330,10 @@ void run_workload(environment &env) {
   auto range_read_duration = range_reads(env, db, keys);
 
   spdlog::info("Running Writes");
-  std::vector<int> keys_to_write(extra_keys.begin(),
-                                 extra_keys.begin() + env.num_writes);
-  auto write_duration = write_keys(db, keys_to_write);
+  int max_base = *std::max_element(keys.begin(), keys.end());
+  int max_extra = *std::max_element(extra_keys.begin(), extra_keys.end());
+  int max_key = std::max(max_base, max_extra);
+  auto write_duration = write_keys(env, db, max_key);
 
   log_state_of_tree(db);
   spdlog::info("Empty Reads took {} ms", empty_read_duration.count());
