@@ -4,11 +4,13 @@
 #include <spdlog/spdlog.h>
 
 bool compactions_in_progress(rocksdb::DB *db) {
-  uint64_t compacts_in_progress = 0;
-  db->GetIntProperty("rocksdb.compaction-pending", &compacts_in_progress);
-  spdlog::debug("Remaining compactions {}", compacts_in_progress);
+  uint64_t value = 0;
+  db->GetIntProperty("rocksdb.estimate-pending-compaction-bytes", &value);
+  spdlog::debug("Estimated compaction bytes {}", value);
+  db->GetIntProperty("rocksdb.compaction-pending", &value);
+  spdlog::debug("Remaining compactions {}", value);
 
-  return compacts_in_progress > 0;
+  return value > 0;
 }
 
 void wait_for_all_background_compactions(rocksdb::DB *db) {
@@ -17,14 +19,11 @@ void wait_for_all_background_compactions(rocksdb::DB *db) {
   }
 }
 
-void wait_for_all_compactions(rocksdb::DB *db) {
+void wait_for_all_compactions_and_close_db(rocksdb::DB *db) {
   auto wfc_opts = rocksdb::WaitForCompactOptions();
   wfc_opts.wait_for_purge = true;
   wfc_opts.flush = true;
-  wait_for_all_background_compactions(db);
-  db->WaitForCompact(wfc_opts);
-  db->Flush(rocksdb::FlushOptions());
-  wait_for_all_background_compactions(db);
+  wfc_opts.close_db = true;
   db->WaitForCompact(wfc_opts);
 }
 

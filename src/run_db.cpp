@@ -14,13 +14,13 @@
 #include "kap_compactor.hpp"
 #include "kaplsm/kap_compactor.hpp"
 #include "kaplsm/kap_options.hpp"
-#include "utils/utils.hpp"
 #include "rocksdb/db.h"
 #include "rocksdb/perf_context.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/table.h"
 #include "rocksdb/write_batch.h"
+#include "utils/utils.hpp"
 
 #define PAGESIZE 4096
 
@@ -168,7 +168,7 @@ std::chrono::milliseconds read_keys(rocksdb::DB *db, std::vector<int> &keys) {
   auto read_start = std::chrono::high_resolution_clock::now();
   for (auto &key : keys) {
     std::string value;
-    spdlog::trace("Reading key: {}", key);
+    // spdlog::trace("Reading key: {}", key);
     auto status = db->Get(read_opt, pad_str_from_int(key, 12), &value);
     if (!status.ok() && !status.IsNotFound()) {
       spdlog::error("Error reading key: {}", key);
@@ -201,7 +201,7 @@ std::chrono::milliseconds range_reads(environment env, rocksdb::DB *db,
     auto lower_key = pad_str_from_int(exisiting_keys[index], 12);
     auto upper_key = pad_str_from_int(exisiting_keys[index + key_hop], 12);
     read_opt.iterate_upper_bound = new rocksdb::Slice(upper_key);
-    spdlog::trace("Range read: {} -> {}", lower_key, upper_key);
+    // spdlog::trace("Range read: {} -> {}", lower_key, upper_key);
     auto it = db->NewIterator(read_opt);
     for (it->Seek(rocksdb::Slice(lower_key)); it->Valid(); it->Next()) {
       auto value = it->value().ToString();
@@ -217,7 +217,8 @@ std::chrono::milliseconds range_reads(environment env, rocksdb::DB *db,
 }
 
 std::pair<std::chrono::milliseconds, std::chrono::milliseconds> write_keys(
-    environment &env, rocksdb::DB *db, int num_keys) {
+    environment &env, rocksdb::DB *db, kaplsm::KapCompactor *kcompactor,
+    int num_keys) {
   rocksdb::WriteOptions write_opt;
   write_opt.sync = false;
   write_opt.low_pri = true;
@@ -244,7 +245,7 @@ std::pair<std::chrono::milliseconds, std::chrono::milliseconds> write_keys(
     }
     db->CompactFiles(opt, file_names, 1);
   }
-  wait_for_all_compactions(db);
+  db->WaitForCompact(rocksdb::WaitForCompactOptions());
   spdlog::debug("Finished force compaction, starting writes");
   auto kv = create_kv_pair(dist(engine), 12, env.kap_opt.entry_size);
   spdlog::debug("Example key to write: {}", kv.first.data());
@@ -254,18 +255,21 @@ std::pair<std::chrono::milliseconds, std::chrono::milliseconds> write_keys(
     // Adding num_keys to ensure all keys are unique writes
     kv = create_kv_pair(dist(engine), 12, env.kap_opt.entry_size);
     auto status = db->Put(write_opt, kv.first, kv.second);
-    spdlog::trace("Writing key: {}", kv.first.data());
+    // spdlog::trace("Writing key: {}", kv.first.data());
     if (!status.ok()) {
       spdlog::error("Error writing key: {}", kv.first.data());
       spdlog::error("{}", status.ToString());
     }
   }
+  db->Flush(rocksdb::FlushOptions());
   auto write_end = std::chrono::high_resolution_clock::now();
   auto write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       write_end - write_start);
 
   auto remaining_compactions_start = std::chrono::high_resolution_clock::now();
-  wait_for_all_compactions(db);
+  spdlog::info("Remaining compactions: {}",
+               kcompactor->GetCompactionTaskCount());
+  kcompactor->WaitForCompactions();
   auto remaining_compactions_end = std::chrono::high_resolution_clock::now();
   auto remaining_compactions_duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -323,7 +327,7 @@ void run_workload(environment &env) {
   int max_base = *std::max_element(keys.begin(), keys.end());
   int max_extra = *std::max_element(extra_keys.begin(), extra_keys.end());
   int max_key = std::max(max_base, max_extra);
-  auto write_duration = write_keys(env, db, max_key);
+  auto write_duration = write_keys(env, db, kcompactor, max_key);
 
   log_state_of_tree(db);
   spdlog::info("Empty Reads took {} ms", empty_read_duration.count());

@@ -28,9 +28,6 @@ void KapCompactor::OnFlushCompleted(DB* db, const FlushJobInfo& info) {
       if (info.triggered_writes_stop) {
         task->retry_on_fail = true;
       }
-      // Schedule compaction in a different thread.
-      spdlog::debug("Scheduling task from {} -> {}", task->input_level,
-                    task->output_level);
       ScheduleCompaction(task);
     }
   }
@@ -46,8 +43,6 @@ void KapCompactor::OnCompactionCompleted(DB* db,
        level_idx++) {
     CompactionTask* task = PickCompaction(db, info.cf_name, level_idx);
     if (task != nullptr) {
-      std::cout << "Scheduling task from level " << task->input_level << " to "
-                << task->output_level << std::endl;
       ScheduleCompaction(task);
     }
   }
@@ -100,6 +95,9 @@ CompactionTask* KapCompactor::PickCompaction(DB* db, const std::string& cf_name,
 
 // Schedule the specified compaction task in background.
 void KapCompactor::ScheduleCompaction(CompactionTask* task) {
+  spdlog::trace("Scheduling compaction {} -> {}", task->input_level,
+                task->output_level);
+  this->compaction_task_count_++;
   rocksdb_options_.env->Schedule(&KapCompactor::CompactFiles, task);
 }
 
@@ -107,11 +105,10 @@ void KapCompactor::CompactFiles(void* arg) {
   std::unique_ptr<CompactionTask> task(static_cast<CompactionTask*>(arg));
   assert(task);
   assert(task->db);
-  spdlog::debug("Scheduling compaction {} -> {}", task->input_level,
-                task->output_level);
   rocksdb::Status s = task->db->CompactFiles(
       task->compact_options, task->input_file_names, task->output_level);
-  spdlog::debug("CompactFiles() finished with status {}", s.ToString());
+  spdlog::trace("CompactFiles() finished with status {}", s.ToString());
+  task->compactor->DecrementCompactionTaskCount();
   if (!s.ok() && !s.IsIOError() && task->retry_on_fail) {
     // If a compaction task with its retry_on_fail=true failed,
     // try to schedule another compaction in case the reason

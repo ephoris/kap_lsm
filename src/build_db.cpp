@@ -6,18 +6,17 @@
 #include <CLI/CLI.hpp>
 #include <iostream>
 #include <string>
-#include <thread>
 #include <utility>
 
 #include "kap_compactor.hpp"
 #include "kaplsm/kap_compactor.hpp"
 #include "kaplsm/kap_options.hpp"
-#include "utils/utils.hpp"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/table.h"
 #include "rocksdb/write_batch.h"
 #include "spdlog/common.h"
+#include "utils/utils.hpp"
 
 typedef struct environment {
   std::string db_path;
@@ -49,7 +48,6 @@ environment parse_args(int argc, char *argv[]) {
   app.add_option("-E,--entry_size", env.kap_opt.entry_size, "Entry size");
   app.add_option("-B,--bits_per_element", env.kap_opt.bits_per_element,
                  "Bloom filter bits");
-  app.add_option("-N,--num_keys", env.kap_opt.num_keys, "Number of keys");
 
   // Misc commands
   app.add_option("--parallelism", env.parallelism, "Number of worker threads");
@@ -177,15 +175,24 @@ void build_db(environment &env) {
     spdlog::info("Writing last batch...", batch_num);
     db->Write(write_opt, &batch);
   }
-  wait_for_all_compactions(db);
+  spdlog::debug("Flushing DB...");
+  db->Flush(rocksdb::FlushOptions());
+  spdlog::debug("Waiting for {} compactions",
+                kcompactor->GetCompactionTaskCount());
+  kcompactor->WaitForCompactions();
 
   log_state_of_tree(db);
 
+  spdlog::info("Writing kap options...");
+  kap_options.WriteConfig(env.db_path + "/kap_options.json");
+
+  spdlog::debug("Compactions before closing {}",
+                kcompactor->GetCompactionTaskCount());
+  spdlog::info("Closing DB...");
   db->Close();
   delete db;
 
-  spdlog::info("Writing kap options...");
-  kap_options.WriteConfig(env.db_path + "/kap_options.json");
+  assert(kcompactor->GetCompactionTaskCount() == 0);
 }
 
 int main(int argc, char *argv[]) {

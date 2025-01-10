@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 
 #include "kap_options.hpp"
@@ -29,6 +30,8 @@ class Compactor : public EventListener {
 
   // Schedule and run the specified compaction task in background.
   virtual void ScheduleCompaction(CompactionTask* task) = 0;
+
+  virtual void DecrementCompactionTaskCount() = 0;
 };
 
 struct CompactionTask {
@@ -77,12 +80,23 @@ class KapCompactor : public Compactor {
   std::vector<std::string> CheckIfLevelNeedsCompaction(
       rocksdb::LevelMetaData level);
 
+  int GetCompactionTaskCount() { return compaction_task_count_.load(); }
+
+  void DecrementCompactionTaskCount() override { compaction_task_count_--; }
+
+  void WaitForCompactions() {
+    while (compaction_task_count_.load() > 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
+
   static void CompactFiles(void* arg);
 
  private:
   rocksdb::Options rocksdb_options_;
   KapOptions kap_options_;
   CompactionOptions compact_options_;
+  std::atomic<int> compaction_task_count_{0};
 };
 
 }  // namespace kaplsm
