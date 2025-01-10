@@ -12,6 +12,7 @@
 #include "kap_compactor.hpp"
 #include "kaplsm/kap_compactor.hpp"
 #include "kaplsm/kap_options.hpp"
+#include "utils/utils.hpp"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/table.h"
@@ -106,20 +107,6 @@ std::pair<std::string, std::string> create_kv_pair(int key, int key_size,
   return std::pair(padded_key, val);
 }
 
-bool compactions_in_progress(rocksdb::DB *db) {
-  uint64_t compacts_in_progress = 0;
-  db->GetIntProperty("rocksdb.background_compactions", &compacts_in_progress);
-  spdlog::debug("Remaining compactions {}", compacts_in_progress);
-
-  return compacts_in_progress > 0;
-}
-
-void wait_for_all_background_compactions(rocksdb::DB *db) {
-  while (compactions_in_progress(db)) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
-}
-
 rocksdb::Options load_options(environment &env) {
   // rocksdb::Options opt = *rocksdb::Options().PrepareForBulkLoad();
   rocksdb::Options opt;
@@ -190,27 +177,9 @@ void build_db(environment &env) {
     spdlog::info("Writing last batch...", batch_num);
     db->Write(write_opt, &batch);
   }
-  auto wfc_opts = rocksdb::WaitForCompactOptions();
-  wfc_opts.wait_for_purge = true;
-  wfc_opts.flush = true;
-  db->WaitForCompact(wfc_opts);
-  db->Flush(rocksdb::FlushOptions());
-  db->WaitForCompact(wfc_opts);
+  wait_for_all_compactions(db);
 
-  spdlog::info("State of the tree:");
-  rocksdb::ColumnFamilyMetaData cf_meta;
-  db->GetColumnFamilyMetaData(&cf_meta);
-  std::vector<std::string> file_names;
-  for (auto &level : cf_meta.levels) {
-    std::string level_str = "";
-    for (auto &file : level.files) {
-      level_str += file.name + ", ";
-    }
-    level_str =
-        level_str == "" ? "EMPTY" : level_str.substr(0, level_str.size() - 2);
-    spdlog::info("Level {} | Size: {} | Files: {}", level.level, level.size,
-                 level_str);
-  }
+  log_state_of_tree(db);
 
   db->Close();
   delete db;

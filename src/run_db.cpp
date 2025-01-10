@@ -14,6 +14,7 @@
 #include "kap_compactor.hpp"
 #include "kaplsm/kap_compactor.hpp"
 #include "kaplsm/kap_options.hpp"
+#include "utils/utils.hpp"
 #include "rocksdb/db.h"
 #include "rocksdb/perf_context.h"
 #include "rocksdb/slice.h"
@@ -156,31 +157,6 @@ rocksdb::Options load_options(environment &env) {
   opt.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
   return opt;
-}
-
-void wait_for_all_compactions(rocksdb::DB *db) {
-  auto wfc_opts = rocksdb::WaitForCompactOptions();
-  wfc_opts.wait_for_purge = true;
-  wfc_opts.flush = true;
-  db->WaitForCompact(wfc_opts);
-  db->Flush(rocksdb::FlushOptions());
-  db->WaitForCompact(wfc_opts);
-}
-
-void log_state_of_tree(rocksdb::DB *db) {
-  spdlog::info("State of the tree:");
-  rocksdb::ColumnFamilyMetaData cf_meta;
-  db->GetColumnFamilyMetaData(&cf_meta);
-  for (auto &level : cf_meta.levels) {
-    std::string level_str = "";
-    for (auto &file : level.files) {
-      level_str += file.name + ", ";
-    }
-    level_str =
-        level_str == "" ? "EMPTY" : level_str.substr(0, level_str.size() - 2);
-    spdlog::info("Level {} | Size: {} | Files: {}", level.level, level.size,
-                 level_str);
-  }
 }
 
 std::chrono::milliseconds read_keys(rocksdb::DB *db, std::vector<int> &keys) {

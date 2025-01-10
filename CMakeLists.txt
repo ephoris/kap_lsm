@@ -27,6 +27,7 @@ add_subdirectory(extern)
 add_library(kaplsm_lib OBJECT
     ${CMAKE_SOURCE_DIR}/src/kaplsm/kap_compactor.cpp
     ${CMAKE_SOURCE_DIR}/src/utils/keygen.cpp
+    ${CMAKE_SOURCE_DIR}/src/utils/utils.cpp
 )
 
 target_compile_features(kaplsm_lib PRIVATE
