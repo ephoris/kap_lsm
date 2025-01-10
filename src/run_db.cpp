@@ -15,10 +15,11 @@
 #include "kaplsm/kap_compactor.hpp"
 #include "kaplsm/kap_options.hpp"
 #include "rocksdb/db.h"
+#include "rocksdb/perf_context.h"
 #include "rocksdb/slice.h"
+#include "rocksdb/statistics.h"
 #include "rocksdb/table.h"
 #include "rocksdb/write_batch.h"
-#include "utils/keygen.hpp"
 
 #define PAGESIZE 4096
 
@@ -112,12 +113,12 @@ std::string pad_str_from_int(int num, int size) {
   return padded_key;
 }
 
-std::pair<rocksdb::Slice, rocksdb::Slice> create_kv_pair(int key, int key_size,
-                                                         int entry_size) {
+std::pair<std::string, std::string> create_kv_pair(int key, int key_size,
+                                                   int entry_size) {
   auto padded_key = pad_str_from_int(key, key_size);
-  rocksdb::Slice val = std::string(entry_size - padded_key.length(), 'a');
+  auto val_str = std::string(entry_size - padded_key.length(), 'a');
 
-  return std::pair<rocksdb::Slice, rocksdb::Slice>(padded_key, val);
+  return std::pair(padded_key, val_str);
 }
 
 rocksdb::Options load_options(environment &env) {
@@ -239,17 +240,20 @@ std::chrono::milliseconds range_reads(environment env, rocksdb::DB *db,
   return range_read_duration;
 }
 
-std::chrono::milliseconds write_keys(environment &env, rocksdb::DB *db,
-                                     int num_keys) {
+std::pair<std::chrono::milliseconds, std::chrono::milliseconds> write_keys(
+    environment &env, rocksdb::DB *db, int num_keys) {
   rocksdb::WriteOptions write_opt;
   write_opt.sync = false;
   write_opt.low_pri = true;
   write_opt.disableWAL = true;
   write_opt.no_slowdown = false;
 
+  spdlog::debug("Keygen for dist: [{}, {}]", num_keys, 2 * num_keys);
   std::uniform_int_distribution<int> dist(num_keys, 2 * num_keys);
   std::mt19937 engine(42);
+  spdlog::debug("Example key: {}", dist(engine));
   spdlog::trace("Flushing DB to get into correct state");
+
   // Force compaction of all files in Level 0
   // Use an empty key range to compact everything
   rocksdb::ColumnFamilyMetaData cf_meta;
@@ -266,30 +270,39 @@ std::chrono::milliseconds write_keys(environment &env, rocksdb::DB *db,
   }
   wait_for_all_compactions(db);
   spdlog::debug("Finished force compaction, starting writes");
+  auto kv = create_kv_pair(dist(engine), 12, env.kap_opt.entry_size);
+  spdlog::debug("Example key to write: {}", kv.first.data());
 
   auto write_start = std::chrono::high_resolution_clock::now();
   for (auto write_idx = 0; write_idx < env.num_writes; write_idx++) {
     // Adding num_keys to ensure all keys are unique writes
-    auto kv = create_kv_pair(dist(engine), 12, env.kap_opt.entry_size);
-    spdlog::trace("Writing key: {}", kv.first.data());
+    kv = create_kv_pair(dist(engine), 12, env.kap_opt.entry_size);
     auto status = db->Put(write_opt, kv.first, kv.second);
+    spdlog::trace("Writing key: {}", kv.first.data());
     if (!status.ok()) {
       spdlog::error("Error writing key: {}", kv.first.data());
       spdlog::error("{}", status.ToString());
     }
   }
-  wait_for_all_compactions(db);
   auto write_end = std::chrono::high_resolution_clock::now();
   auto write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       write_end - write_start);
 
-  return write_duration;
+  auto remaining_compactions_start = std::chrono::high_resolution_clock::now();
+  wait_for_all_compactions(db);
+  auto remaining_compactions_end = std::chrono::high_resolution_clock::now();
+  auto remaining_compactions_duration =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          remaining_compactions_end - remaining_compactions_start);
+
+  return std::pair(write_duration, remaining_compactions_duration);
 }
 
 void run_workload(environment &env) {
   spdlog::info("Building DB: {}", env.db_path);
   kaplsm::KapOptions kap_options(env.db_path + "/kap_options.json");
   rocksdb::Options rocksdb_options = load_options(env);
+  rocksdb_options.statistics = rocksdb::CreateDBStatistics();
   auto kcompactor = new kaplsm::KapCompactor(rocksdb_options, kap_options);
   rocksdb_options.listeners.emplace_back(kcompactor);
 
@@ -315,6 +328,7 @@ void run_workload(environment &env) {
   std::shuffle(keys.begin(), keys.end(), gen);
   std::shuffle(extra_keys.begin(), extra_keys.end(), gen);
 
+  rocksdb_options.statistics->Reset();
   spdlog::info("Running Empty Reads");
   std::vector<int> empty_read_keys(extra_keys.begin(),
                                    extra_keys.begin() + env.num_empty_reads);
@@ -339,7 +353,29 @@ void run_workload(environment &env) {
   spdlog::info("Empty Reads took {} ms", empty_read_duration.count());
   spdlog::info("Non-Empty Reads took {} ms", non_empty_read_duration.count());
   spdlog::info("Range Reads took {} ms", range_read_duration.count());
-  spdlog::info("Writes took {} ms", write_duration.count());
+  spdlog::info("Writes took {} ms", write_duration.first.count());
+
+  std::map<std::string, uint64_t> stats;
+  rocksdb_options.statistics->getTickerMap(&stats);
+
+  spdlog::info("(l0, l1, l2plus) : ({}, {}, {})", stats["rocksdb.l0.hit"],
+               stats["rocksdb.l1.hit"], stats["rocksdb.l2andup.hit"]);
+  spdlog::info("(bf_true_neg, bf_pos, bf_true_pos) : ({}, {}, {})",
+               stats["rocksdb.bloom.filter.useful"],
+               stats["rocksdb.bloom.filter.full.positive"],
+               stats["rocksdb.bloom.filter.full.true.positive"]);
+  spdlog::info(
+      "(bytes_written, compact_read, compact_write, flush_write) : ({}, {}, "
+      "{}, {})",
+      stats["rocksdb.bytes.written"], stats["rocksdb.compact.read.bytes"],
+      stats["rocksdb.compact.write.bytes"], stats["rocksdb.flush.write.bytes"]);
+  spdlog::info("(block_read_count) : ({})",
+               rocksdb::get_perf_context()->block_read_count);
+  spdlog::info("(z0, z1, q, w) : ({}, {}, {}, {})", empty_read_duration.count(),
+               non_empty_read_duration.count(), range_read_duration.count(),
+               write_duration.first.count());
+  spdlog::info("(remaining_compactions_duration) : ({})",
+               write_duration.second.count());
 
   db->Close();
 }

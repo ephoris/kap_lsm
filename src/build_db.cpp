@@ -98,12 +98,12 @@ std::string pad_str_from_int(int num, int size) {
   return padded_key;
 }
 
-std::pair<rocksdb::Slice, rocksdb::Slice> create_kv_pair(int key, int key_size,
-                                                         int entry_size) {
+std::pair<std::string, std::string> create_kv_pair(int key, int key_size,
+                                                   int entry_size) {
   auto padded_key = pad_str_from_int(key, key_size);
-  rocksdb::Slice val = std::string(entry_size - padded_key.length(), 'a');
+  auto val = std::string(entry_size - padded_key.length(), 'a');
 
-  return std::pair<rocksdb::Slice, rocksdb::Slice>(padded_key, val);
+  return std::pair(padded_key, val);
 }
 
 bool compactions_in_progress(rocksdb::DB *db) {
