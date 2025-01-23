@@ -12,11 +12,11 @@
 namespace kaplsm {
 
 class KapOptions {
- public:
+public:
   int size_ratio = 2;
   std::vector<int> kapacities;
-  int buffer_size = 1 << 20;  //> bytes (B) defaults 1 MB
-  int entry_size = 512;       //> bytes (E)
+  int buffer_size = 1 << 20; //> bytes (B) defaults 1 MB
+  int entry_size = 512;      //> bytes (E)
   // bits per element per bloom filter at all levels (h)
   double bits_per_element = 5.0;
   uint64_t fixed_file_size = std::numeric_limits<uint64_t>::max();
@@ -71,4 +71,4 @@ class KapOptions {
   }
 };
 
-}  // namespace kaplsm
+} // namespace kaplsm

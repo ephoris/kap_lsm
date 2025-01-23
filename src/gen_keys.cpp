@@ -36,14 +36,14 @@ environment parse_args(int argc, char *argv[]) {
   }
 
   switch (app.count("-v")) {
-    case 1:
-      spdlog::set_level(spdlog::level::debug);
-      break;
-    case 2:
-      spdlog::set_level(spdlog::level::trace);
-      break;
-    default:
-      spdlog::set_level(spdlog::level::info);
+  case 1:
+    spdlog::set_level(spdlog::level::debug);
+    break;
+  case 2:
+    spdlog::set_level(spdlog::level::trace);
+    break;
+  default:
+    spdlog::set_level(spdlog::level::info);
   }
   spdlog::info("Verbosity {}", app.count("-v"));
 
@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
   spdlog::debug("start extra key = {}", extra_keys.at(0));
   spdlog::debug("end extra keys = {}", extra_keys.at(env.extra_keys - 1));
   extra_fid.write(reinterpret_cast<char *>(extra_keys.data()),
-            env.extra_keys * sizeof(int));
+                  env.extra_keys * sizeof(int));
   extra_fid.close();
 
   return EXIT_SUCCESS;

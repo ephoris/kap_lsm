@@ -11,27 +11,27 @@
 #define KEY_DOMAIN 1000000000
 
 class Distribution {
- public:
+public:
   virtual ~Distribution() {}
-  virtual int gen(std::mt19937& engine) = 0;
+  virtual int gen(std::mt19937 &engine) = 0;
 };
 
 class Uniform : public Distribution {
- public:
+public:
   Uniform(int max);
   ~Uniform() {}
-  int gen(std::mt19937& engine);
+  int gen(std::mt19937 &engine);
 
- private:
+private:
   std::uniform_int_distribution<int> dist;
 };
 
 class Zipf : public Distribution {
- public:
+public:
   Zipf(int max);
   ~Zipf() {}
-  int gen(std::mt19937& engine);
+  int gen(std::mt19937 &engine);
 
- private:
+private:
   opencog::zipf_distribution<int, double> dist;
 };

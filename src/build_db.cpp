@@ -63,14 +63,14 @@ environment parse_args(int argc, char *argv[]) {
   }
 
   switch (app.count("-v")) {
-    case 1:
-      spdlog::set_level(spdlog::level::debug);
-      break;
-    case 2:
-      spdlog::set_level(spdlog::level::trace);
-      break;
-    default:
-      spdlog::set_level(spdlog::level::info);
+  case 1:
+    spdlog::set_level(spdlog::level::debug);
+    break;
+  case 2:
+    spdlog::set_level(spdlog::level::trace);
+    break;
+  default:
+    spdlog::set_level(spdlog::level::info);
   }
   spdlog::info("Verbosity {}", app.count("-v"));
 

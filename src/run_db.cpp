@@ -74,14 +74,14 @@ environment parse_args(int argc, char *argv[]) {
   }
 
   switch (app.count("-v")) {
-    case 1:
-      spdlog::set_level(spdlog::level::debug);
-      break;
-    case 2:
-      spdlog::set_level(spdlog::level::trace);
-      break;
-    default:
-      spdlog::set_level(spdlog::level::info);
+  case 1:
+    spdlog::set_level(spdlog::level::debug);
+    break;
+  case 2:
+    spdlog::set_level(spdlog::level::trace);
+    break;
+  default:
+    spdlog::set_level(spdlog::level::info);
   }
   spdlog::info("Verbosity {}", app.count("-v"));
 
@@ -216,9 +216,9 @@ std::chrono::milliseconds range_reads(environment env, rocksdb::DB *db,
   return range_read_duration;
 }
 
-std::pair<std::chrono::milliseconds, std::chrono::milliseconds> write_keys(
-    environment &env, rocksdb::DB *db, kaplsm::KapCompactor *kcompactor,
-    int num_keys) {
+std::pair<std::chrono::milliseconds, std::chrono::milliseconds>
+write_keys(environment &env, rocksdb::DB *db, kaplsm::KapCompactor *kcompactor,
+           int num_keys) {
   rocksdb::WriteOptions write_opt;
   write_opt.sync = false;
   write_opt.low_pri = true;

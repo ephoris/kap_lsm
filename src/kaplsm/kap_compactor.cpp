@@ -19,11 +19,11 @@ using namespace kaplsm;
 // When flush happens, it determines whether to trigger compaction. If
 // triggered_writes_stop is true, it will also set the retry flag of
 // compaction-task to true.
-void KapCompactor::OnFlushCompleted(DB* db, const FlushJobInfo& info) {
+void KapCompactor::OnFlushCompleted(DB *db, const FlushJobInfo &info) {
   for (size_t level_idx = 0;
        level_idx < static_cast<size_t>(this->rocksdb_options_.num_levels) - 1;
        level_idx++) {
-    CompactionTask* task = PickCompaction(db, info.cf_name, level_idx);
+    CompactionTask *task = PickCompaction(db, info.cf_name, level_idx);
     if (task != nullptr) {
       if (info.triggered_writes_stop) {
         task->retry_on_fail = true;
@@ -36,20 +36,20 @@ void KapCompactor::OnFlushCompleted(DB* db, const FlushJobInfo& info) {
 // When a compaction finishes, we will also check to make sure the state of the
 // tree is OK. This SHOULD be called until the tree returns no more viable
 // compaction jobs
-void KapCompactor::OnCompactionCompleted(DB* db,
-                                         const CompactionJobInfo& info) {
+void KapCompactor::OnCompactionCompleted(DB *db,
+                                         const CompactionJobInfo &info) {
   for (size_t level_idx = 0;
        level_idx < static_cast<size_t>(this->rocksdb_options_.num_levels) - 1;
        level_idx++) {
-    CompactionTask* task = PickCompaction(db, info.cf_name, level_idx);
+    CompactionTask *task = PickCompaction(db, info.cf_name, level_idx);
     if (task != nullptr) {
       ScheduleCompaction(task);
     }
   }
 }
 
-std::vector<std::string> KapCompactor::CheckIfLevelNeedsCompaction(
-    rocksdb::LevelMetaData level) {
+std::vector<std::string>
+KapCompactor::CheckIfLevelNeedsCompaction(rocksdb::LevelMetaData level) {
   auto level_kapacity = this->kap_options_.kapacities[level.level];
   if (level.files.size() <= static_cast<size_t>(level_kapacity)) {
     return {};
@@ -68,7 +68,7 @@ std::vector<std::string> KapCompactor::CheckIfLevelNeedsCompaction(
 // PickCompaction looks at one paritcular level and checks whether or not the
 // level is full and needs to compact. If no compaction is needed, returns a
 // nullptr
-CompactionTask* KapCompactor::PickCompaction(DB* db, const std::string& cf_name,
+CompactionTask *KapCompactor::PickCompaction(DB *db, const std::string &cf_name,
                                              size_t level_idx) {
   ColumnFamilyMetaData cf_meta;
   rocksdb::CompactionOptions opt;
@@ -94,15 +94,15 @@ CompactionTask* KapCompactor::PickCompaction(DB* db, const std::string& cf_name,
 }
 
 // Schedule the specified compaction task in background.
-void KapCompactor::ScheduleCompaction(CompactionTask* task) {
+void KapCompactor::ScheduleCompaction(CompactionTask *task) {
   spdlog::trace("Scheduling compaction {} -> {}", task->input_level,
                 task->output_level);
   this->compaction_task_count_++;
   rocksdb_options_.env->Schedule(&KapCompactor::CompactFiles, task);
 }
 
-void KapCompactor::CompactFiles(void* arg) {
-  std::unique_ptr<CompactionTask> task(static_cast<CompactionTask*>(arg));
+void KapCompactor::CompactFiles(void *arg) {
+  std::unique_ptr<CompactionTask> task(static_cast<CompactionTask *>(arg));
   assert(task);
   assert(task->db);
   rocksdb::Status s = task->db->CompactFiles(
@@ -113,7 +113,7 @@ void KapCompactor::CompactFiles(void* arg) {
     // If a compaction task with its retry_on_fail=true failed,
     // try to schedule another compaction in case the reason
     // is not an IO error.
-    CompactionTask* new_task = task->compactor->PickCompaction(
+    CompactionTask *new_task = task->compactor->PickCompaction(
         task->db, task->column_family_name, task->input_level);
     task->compactor->ScheduleCompaction(new_task);
   }
