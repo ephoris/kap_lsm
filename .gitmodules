@@ -1,0 +1,5 @@
+[submodule "extern/rocksdb"]
+	path = extern/rocksdb
+	url = git@github.com:BU-DiSC/rocksdb.git
+    branch = ephoris/monkey_bloom_filter
+    shallow = true
