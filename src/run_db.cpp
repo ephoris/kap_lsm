@@ -330,10 +330,6 @@ void run_workload(environment &env) {
   auto write_duration = write_keys(env, db, kcompactor, max_key);
 
   log_state_of_tree(db);
-  spdlog::info("Empty Reads took {} ms", empty_read_duration.count());
-  spdlog::info("Non-Empty Reads took {} ms", non_empty_read_duration.count());
-  spdlog::info("Range Reads took {} ms", range_read_duration.count());
-  spdlog::info("Writes took {} ms", write_duration.first.count());
 
   std::map<std::string, uint64_t> stats;
   rocksdb_options.statistics->getTickerMap(&stats);
