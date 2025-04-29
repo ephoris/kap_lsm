@@ -269,7 +269,12 @@ std::pair<std::chrono::milliseconds, std::chrono::milliseconds> write_keys(
   auto remaining_compactions_start = std::chrono::high_resolution_clock::now();
   spdlog::info("Remaining compactions: {}",
                kcompactor->GetCompactionTaskCount());
-  kcompactor->WaitForCompactions();
+  while (!kcompactor->CheckTreeKapacities(db)) {
+    kcompactor->ScheduleCompactionsAcrossLevels(db);
+    spdlog::debug("Waiting for {} compactions",
+                  kcompactor->GetCompactionTaskCount());
+    kcompactor->WaitForCompactions();
+  }
   auto remaining_compactions_end = std::chrono::high_resolution_clock::now();
   auto remaining_compactions_duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -106,19 +106,15 @@ std::pair<std::string, std::string> create_kv_pair(int key, int key_size,
 }
 
 rocksdb::Options load_options(environment &env) {
-  // rocksdb::Options opt = *rocksdb::Options().PrepareForBulkLoad();
   rocksdb::Options opt;
   opt.create_if_missing = true;
   opt.error_if_exists = true;
   opt.compaction_style = rocksdb::kCompactionStyleNone;
   opt.compression = rocksdb::kNoCompression;
-  // Bulk loading so we manually trigger compactions when need be
   opt.level0_file_num_compaction_trigger = env.kap_opt.size_ratio;
   opt.level0_slowdown_writes_trigger = 20;
   opt.IncreaseParallelism(env.parallelism);
-  // opt.disable_auto_compactions = true;
   opt.num_levels = 20;
-  // opt.target_file_size_base = UINT64_MAX;
   opt.target_file_size_multiplier = env.kap_opt.size_ratio;
   opt.target_file_size_base = env.kap_opt.buffer_size;
   opt.write_buffer_size = env.kap_opt.buffer_size;
@@ -135,13 +131,34 @@ rocksdb::Options load_options(environment &env) {
 
 void build_db(environment &env) {
   spdlog::info("Building DB: {}", env.db_path);
-  kaplsm::KapOptions kap_options;
   rocksdb::Options rocksdb_options = load_options(env);
-  auto kcompactor = new kaplsm::KapCompactor(rocksdb_options, kap_options);
+  auto kcompactor = new kaplsm::KapCompactor(rocksdb_options, env.kap_opt);
   rocksdb_options.listeners.emplace_back(kcompactor);
   auto keys = load_keys(env);
-  kap_options.num_keys = keys.size();
-  kap_options.levels = rocksdb_options.num_levels;
+  env.kap_opt.num_keys = keys.size();
+  env.kap_opt.levels = rocksdb_options.num_levels;
+
+  for (auto kap_idx = 0; static_cast<size_t>(kap_idx) < env.kap_opt.kapacities.size(); kap_idx++) {
+    spdlog::debug("env.kap_opt.kapacities[{}] = {}", kap_idx,
+                  env.kap_opt.kapacities[kap_idx]);
+  }
+  spdlog::debug("env.kap_opt.size_ratio = {}", env.kap_opt.size_ratio);
+  spdlog::debug("env.kap_opt.buffer_size = {}", env.kap_opt.buffer_size);
+  spdlog::debug("env.kap_opt.entry_size = {}", env.kap_opt.entry_size);
+  spdlog::debug("env.kap_opt.bits_per_element = {}",
+                env.kap_opt.bits_per_element);
+  spdlog::debug("env.kap_opt.num_keys = {}", env.kap_opt.num_keys);
+
+  // if (!env.db_path.empty()) {
+  //   if (access(env.db_path.c_str(), F_OK) == 0) {
+  //     spdlog::warn("DB path exists, removing it...");
+  //     std::string cmd = "rm -rf " + env.db_path;
+  //     system(cmd.c_str());
+  //   }
+  // } else {
+  //   spdlog::error("Invalid DB path");
+  //   exit(EXIT_FAILURE);
+  // }
 
   rocksdb::DB *db = nullptr;
   rocksdb::Status status = rocksdb::DB::Open(rocksdb_options, env.db_path, &db);
@@ -177,14 +194,17 @@ void build_db(environment &env) {
   }
   spdlog::debug("Flushing DB...");
   db->Flush(rocksdb::FlushOptions());
-  spdlog::debug("Waiting for {} compactions",
-                kcompactor->GetCompactionTaskCount());
-  kcompactor->WaitForCompactions();
+  while (!kcompactor->CheckTreeKapacities(db)) {
+    kcompactor->ScheduleCompactionsAcrossLevels(db);
+    spdlog::debug("Waiting for {} compactions",
+                  kcompactor->GetCompactionTaskCount());
+    kcompactor->WaitForCompactions();
+  }
 
   log_state_of_tree(db);
 
   spdlog::info("Writing kap options...");
-  kap_options.WriteConfig(env.db_path + "/kap_options.json");
+  env.kap_opt.WriteConfig(env.db_path + "/kap_options.json");
 
   spdlog::debug("Compactions before closing {}",
                 kcompactor->GetCompactionTaskCount());

@@ -3,7 +3,6 @@
 #include <spdlog/spdlog.h>
 
 #include <cmath>
-#include <iostream>
 
 #include "rocksdb/db.h"
 #include "rocksdb/listener.h"
@@ -50,7 +49,10 @@ void KapCompactor::OnCompactionCompleted(DB* db,
 
 std::vector<std::string> KapCompactor::CheckIfLevelNeedsCompaction(
     rocksdb::LevelMetaData level) {
-  auto level_kapacity = this->kap_options_.kapacities[level.level];
+  int level_kapacity = 1;
+  if (static_cast<size_t>(level.level) < this->kap_options_.kapacities.size()) {
+    level_kapacity = this->kap_options_.kapacities[level.level];
+  }
   if (level.files.size() <= static_cast<size_t>(level_kapacity)) {
     return {};
   }
@@ -76,7 +78,10 @@ CompactionTask* KapCompactor::PickCompaction(DB* db, const std::string& cf_name,
   auto level = cf_meta.levels[level_idx];
   auto size_ratio = this->rocksdb_options_.target_file_size_multiplier;
   auto file_base = this->rocksdb_options_.target_file_size_base;
-  auto k_level = this->kap_options_.kapacities.at(level.level);
+  int k_level = 1;
+  if (static_cast<size_t>(level.level) < this->kap_options_.kapacities.size()) {
+    k_level = this->kap_options_.kapacities.at(level.level);
+  }
   // Each level is (total_level_size) / (num_file_kapacity) where
   // total_level_size is equal to m*T^l where l is level, T is size ratio, and m
   // is the size of the memory buffer. We add +1 since RocksDB starts numbering

@@ -90,6 +90,38 @@ class KapCompactor : public Compactor {
     }
   }
 
+  bool CheckTreeKapacities(DB* db) {
+    rocksdb::ColumnFamilyMetaData cf_meta;
+    db->GetColumnFamilyMetaData(&cf_meta);
+    for (size_t level_idx = 0;
+         level_idx < static_cast<size_t>(this->rocksdb_options_.num_levels);
+         level_idx++) {
+      auto level = cf_meta.levels[level_idx];
+      int kapacity = 1;
+      if (level_idx < this->kap_options_.kapacities.size()) {
+        kapacity = this->kap_options_.kapacities[level_idx];
+      }
+      if (level.files.size() > static_cast<size_t>(kapacity)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool ScheduleCompactionsAcrossLevels(DB* db) {
+    bool had_to_schedule = false;
+    for (size_t level_idx = 0;
+         level_idx < static_cast<size_t>(this->rocksdb_options_.num_levels) - 1;
+         level_idx++) {
+      CompactionTask* task = PickCompaction(db, "", level_idx);
+      if (task != nullptr) {
+        ScheduleCompaction(task);
+        had_to_schedule = true;
+      }
+    }
+    return had_to_schedule;
+  }
+
   static void CompactFiles(void* arg);
 
  private:
