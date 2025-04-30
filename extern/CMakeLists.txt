@@ -23,7 +23,7 @@ FetchContent_Declare(
     cli11
     QUIET
     GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-    GIT_TAG v2.3.2
+    GIT_TAG v2.5.0
 )
 FetchContent_MakeAvailable(cli11)
 
@@ -34,9 +34,3 @@ FetchContent_Declare(
     GIT_TAG        v1.x
 )
 FetchContent_MakeAvailable(spdlog)
-# FetchContent_GetProperties(spdlog)
-# if (NOT spdlog_POPULATED)
-#     FetchContent_Populate(spdlog)
-#     add_subdirectory(${spdlog_SOURCE_DIR} ${spdlog_BINARY_DIR})
-# endif()
-
