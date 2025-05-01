@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 
 #include <cmath>
+#include <iostream>
 
 #include "rocksdb/db.h"
 #include "rocksdb/listener.h"
@@ -19,10 +20,10 @@ using namespace kaplsm;
 // triggered_writes_stop is true, it will also set the retry flag of
 // compaction-task to true.
 void KapCompactor::OnFlushCompleted(DB* db, const FlushJobInfo& info) {
-  for (size_t level_idx = 0;
-       level_idx < static_cast<size_t>(this->rocksdb_options_.num_levels) - 1;
-       level_idx++) {
-    CompactionTask* task = PickCompaction(db, info.cf_name, level_idx);
+  for (auto level_idx = this->rocksdb_options_.num_levels - 1; level_idx >= 0;
+       level_idx--) {
+    CompactionTask* task =
+        PickCompaction(db, info.cf_name, static_cast<size_t>(level_idx));
     if (task != nullptr) {
       if (info.triggered_writes_stop) {
         task->retry_on_fail = true;
